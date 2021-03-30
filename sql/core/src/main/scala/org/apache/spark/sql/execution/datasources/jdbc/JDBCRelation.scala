@@ -19,11 +19,10 @@ package org.apache.spark.sql.execution.datasources.jdbc
 
 import scala.collection.mutable.ArrayBuffer
 import scala.math.BigDecimal.RoundingMode
-
 import org.apache.spark.Partition
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.{AnalysisException, DataFrame, Row, SaveMode, SparkSession, SQLContext}
+import org.apache.spark.sql.{AnalysisException, DataFrame, Row, SQLContext, SaveMode, SparkSession}
 import org.apache.spark.sql.catalyst.analysis._
 import org.apache.spark.sql.catalyst.util.{DateFormatter, DateTimeUtils, TimestampFormatter}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils.{getZoneId, stringToDate, stringToTimestamp}
@@ -32,6 +31,8 @@ import org.apache.spark.sql.jdbc.JdbcDialects
 import org.apache.spark.sql.sources._
 import org.apache.spark.sql.types.{DataType, DateType, NumericType, StructType, TimestampType}
 import org.apache.spark.unsafe.types.UTF8String
+
+import java.util.Locale
 
 /**
  * Instructions on how to partition the table among workers.
@@ -152,7 +153,7 @@ private[sql] object JDBCRelation extends Logging {
         if (uBound == null) {
           lBound
         } else if (lBound == null) {
-          s"$uBound or $column is null"
+          s"$uBound"
         } else {
           s"$lBound AND $uBound"
         }
@@ -162,7 +163,56 @@ private[sql] object JDBCRelation extends Logging {
     val partitions = ans.toArray
     logInfo(s"Number of partitions: $numPartitions, WHERE clauses of these partitions: " +
       partitions.map(_.asInstanceOf[JDBCPartition].whereClause).mkString(", "))
-    partitions
+
+    partitions.orderStrides(column, jdbcOptions.strideOrder)
+  }
+
+  /** Modifies the predicate of the head of a partition array to include null values.
+   *
+   * @param partitions An array of partitions.
+   * @return An array of partitions with and updated head predicate that includes
+   *         null values.
+   */
+  private def addNullToHeadWhereClause(partitionColumn: String,
+                                       partitions: Array[Partition]): Array[Partition] = {
+    val headWhereClause = partitions.head.asInstanceOf[JDBCPartition].whereClause +
+      s" or $partitionColumn is null"
+
+    JDBCPartition(headWhereClause, 0) +: partitions.tail
+  }
+
+  // A map that contains ordering functions for handling the strideOrder JDBC option.
+  private val strideOrderSelector: Map[String, (String, Array[Partition]) => Array[Partition]] =
+    Map(
+      "ascending" -> {
+        (pc, parts) => addNullToHeadWhereClause(pc, parts)
+      },
+      "descending" -> {
+        (pc, parts) => addNullToHeadWhereClause(pc, parts.reverse)
+      },
+      "random" -> {
+        (pc, parts) => {
+          val random = scala.util.Random
+          addNullToHeadWhereClause(pc, random.shuffle(parts.toList).toArray)
+        }
+      }
+    )
+
+  /** Extension methods for Array[Partition].
+   *
+   * @param partitions The object being extended.
+   */
+  implicit class ArrayPartitionOps(partitions: Array[Partition]) {
+    /** An extension method that utilizes the stride order selector to order the array
+     * of partitions
+     *
+     * @param partitionColumn The column used for partitioning.
+     * @param strideOrder The stride order from JDBC options.
+     * @return The array of partitions sorted in the stride order provided.
+     */
+    def orderStrides(partitionColumn: String, strideOrder: String): Array[Partition] = {
+      strideOrderSelector(strideOrder.toLowerCase(Locale.ROOT))(partitionColumn, partitions)
+    }
   }
 
   // Verify column name and type based on the JDBC resolved schema
