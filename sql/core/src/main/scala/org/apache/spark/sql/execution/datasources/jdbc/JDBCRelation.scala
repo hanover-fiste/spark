@@ -17,12 +17,15 @@
 
 package org.apache.spark.sql.execution.datasources.jdbc
 
+import java.util.Locale
+
 import scala.collection.mutable.ArrayBuffer
 import scala.math.BigDecimal.RoundingMode
+
 import org.apache.spark.Partition
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.{AnalysisException, DataFrame, Row, SQLContext, SaveMode, SparkSession}
+import org.apache.spark.sql.{AnalysisException, DataFrame, Row, SaveMode, SparkSession, SQLContext}
 import org.apache.spark.sql.catalyst.analysis._
 import org.apache.spark.sql.catalyst.util.{DateFormatter, DateTimeUtils, TimestampFormatter}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils.{getZoneId, stringToDate, stringToTimestamp}
@@ -31,8 +34,6 @@ import org.apache.spark.sql.jdbc.JdbcDialects
 import org.apache.spark.sql.sources._
 import org.apache.spark.sql.types.{DataType, DateType, NumericType, StructType, TimestampType}
 import org.apache.spark.unsafe.types.UTF8String
-
-import java.util.Locale
 
 /**
  * Instructions on how to partition the table among workers.
@@ -181,23 +182,6 @@ private[sql] object JDBCRelation extends Logging {
     JDBCPartition(headWhereClause, 0) +: partitions.tail
   }
 
-  // A map that contains ordering functions for handling the strideOrder JDBC option.
-  private val strideOrderSelector: Map[String, (String, Array[Partition]) => Array[Partition]] =
-    Map(
-      "ascending" -> {
-        (pc, parts) => addNullToHeadWhereClause(pc, parts)
-      },
-      "descending" -> {
-        (pc, parts) => addNullToHeadWhereClause(pc, parts.reverse)
-      },
-      "random" -> {
-        (pc, parts) => {
-          val random = scala.util.Random
-          addNullToHeadWhereClause(pc, random.shuffle(parts.toList).toArray)
-        }
-      }
-    )
-
   /** Extension methods for Array[Partition].
    *
    * @param partitions The object being extended.
@@ -210,8 +194,20 @@ private[sql] object JDBCRelation extends Logging {
      * @param strideOrder The stride order from JDBC options.
      * @return The array of partitions sorted in the stride order provided.
      */
-    def orderStrides(partitionColumn: String, strideOrder: String): Array[Partition] = {
-      strideOrderSelector(strideOrder.toLowerCase(Locale.ROOT))(partitionColumn, partitions)
+    def orderStrides(partitionColumn: String,
+                     strideOrder: String): Array[Partition] = {
+
+      strideOrder.toLowerCase(Locale.ROOT) match {
+        case "ascending" => addNullToHeadWhereClause(partitionColumn, partitions)
+        case "descending" => addNullToHeadWhereClause(partitionColumn, partitions.reverse)
+        case "random" =>
+          val random = scala.util.Random
+          addNullToHeadWhereClause(partitionColumn, random.shuffle(partitions.toList).toArray)
+        case _ =>
+          logWarning(s"Stride order of: $strideOrder is not a valid option." +
+            s" Defaulting to ascending.")
+          partitions.orderStrides(partitionColumn, "ascending")
+      }
     }
   }
 
