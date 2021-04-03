@@ -168,7 +168,8 @@ private[sql] object JDBCRelation extends Logging {
     partitions.orderStrides(column, jdbcOptions.strideOrder)
   }
 
-  /** Modifies the predicate of the head of a partition array to include null values.
+  /**
+   * Modifies the predicate of the head of a partition array to include null values.
    *
    * @param partitions An array of partitions.
    * @return An array of partitions with and updated head predicate that includes
@@ -182,12 +183,14 @@ private[sql] object JDBCRelation extends Logging {
     JDBCPartition(headWhereClause, 0) +: partitions.tail
   }
 
-  /** Extension methods for Array[Partition].
+  /**
+   * Extension methods for Array[Partition].
    *
    * @param partitions The object being extended.
    */
   implicit class ArrayPartitionOps(partitions: Array[Partition]) {
-    /** An extension method that utilizes the stride order selector to order the array
+    /**
+     * An extension method that utilizes the stride order selector to order the array
      * of partitions
      *
      * @param partitionColumn The column used for partitioning.
