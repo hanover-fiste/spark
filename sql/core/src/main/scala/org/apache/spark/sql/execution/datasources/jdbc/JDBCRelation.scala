@@ -165,22 +165,9 @@ private[sql] object JDBCRelation extends Logging {
     logInfo(s"Number of partitions: $numPartitions, WHERE clauses of these partitions: " +
       partitions.map(_.asInstanceOf[JDBCPartition].whereClause).mkString(", "))
 
-    partitions.orderStrides(column, jdbcOptions.strideOrder)
-  }
-
-  /**
-   * Modifies the predicate of the head of a partition array to include null values.
-   *
-   * @param partitions An array of partitions.
-   * @return An array of partitions with and updated head predicate that includes
-   *         null values.
-   */
-  private def addNullToHeadWhereClause(partitionColumn: String,
-                                       partitions: Array[Partition]): Array[Partition] = {
-    val headWhereClause = partitions.head.asInstanceOf[JDBCPartition].whereClause +
-      s" or $partitionColumn is null"
-
-    JDBCPartition(headWhereClause, 0) +: partitions.tail
+    partitions
+      .orderStrides(column, jdbcOptions.strideOrder)
+      .addNullToHeadWhereClause(column)
   }
 
   /**
@@ -201,16 +188,28 @@ private[sql] object JDBCRelation extends Logging {
                      strideOrder: String): Array[Partition] = {
 
       strideOrder.toLowerCase(Locale.ROOT) match {
-        case "ascending" => addNullToHeadWhereClause(partitionColumn, partitions)
-        case "descending" => addNullToHeadWhereClause(partitionColumn, partitions.reverse)
-        case "random" =>
-          val random = scala.util.Random
-          addNullToHeadWhereClause(partitionColumn, random.shuffle(partitions.toList).toArray)
+        case "ascending" => partitions
+        case "descending" => partitions.reverse
+        case "random" => scala.util.Random.shuffle(partitions.toList).toArray
         case _ =>
           logWarning(s"Stride order of: $strideOrder is not a valid option." +
-            s" Defaulting to ascending.")
-          partitions.orderStrides(partitionColumn, "ascending")
+            " Using default sorting.")
+          partitions
       }
+    }
+
+    /**
+     * Modifies the predicate of the head of a partition array to include null values.
+     *
+     * @param partitionColumn The column used for partitioning.
+     * @return An array of partitions with and updated head predicate that includes
+     *         null values.
+     */
+    def addNullToHeadWhereClause(partitionColumn: String): Array[Partition] = {
+      val headWhereClause = partitions.head.asInstanceOf[JDBCPartition].whereClause +
+        s" or $partitionColumn is null"
+
+      JDBCPartition(headWhereClause, 0) +: partitions.tail
     }
   }
 
